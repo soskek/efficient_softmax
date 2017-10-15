@@ -154,7 +154,6 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
                 x_type.shape[1] >= Ws_types[i].shape[1],
                 Ws_types[i].ndim == 2,
             )
-            print(i, len(Ws_types), len(Rs_types))
             if i != len(Ws_types) - 1:
                 type_check.expect(
                     x_type.dtype == Rs_types[i].dtype,
@@ -167,12 +166,43 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
         y = x.dot(W.T).astype(x.dtype, copy=False)
         return y
 
+    def backward_linear(self, x, W, gy):
+        gx = gy.dot(W).astype(x.dtype, copy=False).reshape(x.shape)
+        gW = gy.T.dot(x).astype(W.dtype, copy=False)
+        return gx, gW
+
+    def backward_log_softmax(self, x, y, gy):
+        if cuda.cudnn_enabled:
+            cudnn = cuda.cudnn
+            libcudnn = cudnn.cudnn
+            _algorithm = libcudnn.CUDNN_SOFTMAX_LOG
+            _mode = libcudnn.CUDNN_SOFTMAX_MODE_CHANNEL
+
+        xp = cuda.get_array_module(x)
+        if xp is not numpy and chainer.should_use_cudnn('>=auto', 3000):
+            oz_dtype = 'd' if x.dtype == 'd' else 'f'
+            one = numpy.array(1, dtype=oz_dtype).ctypes
+            zero = numpy.array(0, dtype=oz_dtype).ctypes
+            handle = cudnn.get_handle()
+            gx = xp.empty(x.shape, dtype=x.dtype)
+            gx_cube = gx.reshape(gx.shape[:2] + (-1, 1))
+            desc = cudnn.create_tensor_descriptor(gx_cube)
+            libcudnn.softmaxBackward(
+                handle, _algorithm, _mode, one.data, desc.value,
+                y.data.ptr, desc.value, gy.data.ptr, zero.data,
+                desc.value, gx.data.ptr)
+        else:
+            gx = gy - xp.exp(y) * gy.sum(axis=1, keepdims=True)
+
+        return gx
+
     def forward_cpu(self, inputs):
         x, t = inputs[:2]
         rest = len(inputs) - 2
         head_W, Ws = inputs[2], inputs[3:2 + (rest - 1) // 2 + 1]
         Rs = inputs[2 + (rest - 1) // 2 + 1:]
         n_tails = len(Rs)
+        minus_inf = -1024.
 
         if chainer.is_debug():
             _check_input_values(x, t, self.ignore_label)
@@ -187,36 +217,41 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
         self.cluster_hots = cluster_hots
 
         head = self.linear(x, head_W)
-        head = log_softmax._log_softmax(head)
         self.head = head
+        head = log_softmax._log_softmax(head)
+        self.ls_head = head
+        reduced_xs = []
         tails = []
+        ls_tails = []
         for i, in_cluster in enumerate(cluster_hots, start=1):
             tail_idx = i - 1
             reduced_x = self.linear(x[in_cluster], Rs[tail_idx])
+            reduced_xs.append(reduced_x)
             out = self.linear(reduced_x, Ws[tail_idx])
-            out = log_softmax._log_softmax(out)
             tails.append(out)
+            out = log_softmax._log_softmax(out)
+            ls_tails.append(out)
+        self.reduced_xs = reduced_xs
         self.tails = tails
+        self.ls_tails = ls_tails
 
         n_head_out = head_W.shape[0] - n_tails
         n_out = n_head_out + sum(W.shape[0] for W in Ws)
         shape = (x.shape[0], n_out)
-        log_y = numpy.full(shape, numpy.nan, dtype=x.dtype)
-        # for error check, nan is filled.
+        log_y = numpy.full(shape, minus_inf, dtype=x.dtype)
 
         log_y[:, :n_head_out] = head[:, :n_head_out]
         # it is possible ``log_[in_head, :n_headout]``, maybe faster?
         for i, (in_cluster, tail) in enumerate(
-                zip(cluster_hots, tails), start=1):
+                zip(cluster_hots, ls_tails), start=1):
             lower, upper = self.cutoff[i], self.cutoff[i + 1]
 
-            tail_main = head[in_cluster, n_head_out + i - 1:n_head_out + i]
-            tail_main = numpy.broadcast_to(tail_main, tail.shape)
-            log_y[in_cluster, lower:upper] = tail_main + tail
-            # not_in_cluster = numpy.logical_not(in_cluster)
-            # log_y[not_in_cluster, lower] = tail_main[not_in_cluster]
-            # These are not required,
-            # because we need just picked values by t (after log softmax).
+            tail_main = head[:, n_head_out + i - 1]
+            tail_main_in = numpy.broadcast_to(
+                tail_main[in_cluster][:, None], tail.shape)
+            log_y[in_cluster, lower:upper] = tail_main_in + tail
+            not_in_cluster = numpy.logical_not(in_cluster)
+            log_y[not_in_cluster, lower] = tail_main[not_in_cluster]
 
         self.y = numpy.exp(log_y)
         log_yd = numpy.rollaxis(log_y, 1)
@@ -284,23 +319,64 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
         head_W, Ws = inputs[2], inputs[3:2 + (rest - 1) // 2 + 1]
         Rs = inputs[2 + (rest - 1) // 2 + 1:]
         n_tails = len(Rs)
+        # xp = cuda.get_array_module(x)
 
         gloss = grad_outputs[0]
         y = self.y.copy()
 
-        gx = y
-        gx[numpy.arange(len(t)), numpy.maximum(t, 0)] -= 1
+        g_log_p = y
+        g_log_p[numpy.arange(len(t)), numpy.maximum(t, 0)] -= 1
 
-        gx *= (t != self.ignore_label).reshape((len(t), 1))
+        g_log_p *= (t != self.ignore_label).reshape((len(t), 1))
 
         if self.reduce == 'mean':
-            gx *= gloss * self._coeff
+            g_log_p *= gloss * self._coeff
         else:
-            gx *= gloss[:, None]
+            g_log_p *= gloss[:, None]
 
         # add processing
+        n_head_out = head_W.shape[0] - n_tails
 
-        return gx, None
+        g_ls_head_out = g_log_p[:, :n_head_out]
+        g_ls_tail_mains = []
+        g_Ws = []
+        g_Rs = []
+        g_xs_from_reduced = []
+        for i, (in_cluster, reduced_x, tail, ls_tail, W, R) in enumerate(
+                zip(self.cluster_hots, self.reduced_xs,
+                    self.tails, self.ls_tails, Ws, Rs), start=1):
+            lower, upper = self.cutoff[i], self.cutoff[i + 1]
+            g_ls_tail_mains.append(
+                g_log_p[:, lower:upper].sum(axis=1, keepdims=True))
+
+            g_ls_tail = g_log_p[in_cluster, lower:upper]
+            g_tail = self.backward_log_softmax(
+                tail, ls_tail, g_ls_tail)
+
+            g_reduced_x, g_W = self.backward_linear(reduced_x, W, g_tail)
+            g_x_from_reduced, g_R = self.backward_linear(
+                x[in_cluster], R, g_reduced_x)
+            g_Ws.append(g_W)
+            g_Rs.append(g_R)
+            g_xs_from_reduced.append(g_x_from_reduced)
+
+        g_ls_head = numpy.concatenate(
+            [g_ls_head_out] + g_ls_tail_mains, axis=1)
+        g_head = self.backward_log_softmax(
+            self.head, self.ls_head, g_ls_head)
+        # g_head_out = g_head[:, n_head_out]
+        # g_tail_mains = g_head[:, n_head_out:n_head_out + n_tails]
+        g_x_from_head, g_head_W = self.backward_linear(x, head_W, g_head)
+
+        g_x = g_x_from_head
+        for i, (in_cluster, g_x_from_reduced) in enumerate(
+                zip(self.cluster_hots, g_xs_from_reduced), start=1):
+            g_x[in_cluster] += g_x_from_reduced
+        # This should be kernel at once
+        # g_x = g_x_from_head + in_cluster * g_x_from_reduced + ...
+
+        ret = [g_x, None, g_head_W] + g_Ws + g_Rs
+        return tuple(ret)
 
     def backward_gpu(self, inputs, grad_outputs):
         cupy = cuda.cupy
@@ -452,7 +528,7 @@ class AdaptiveSoftmaxOutputLayer(chainer.Chain):
 
             cutoff = self.xp.array([0] + cutoff, dtype=np.int32)
             assert(len(cutoff) == self.n_clusters + 1)
-            self.add_param('cutoff', cutoff.shape, dtype='i')
+            self.add_param('cutoff', cutoff.shape, dtype='f')
             self.cutoff.data[:] = cutoff
         print('init adaptive softmax')
 
@@ -461,6 +537,6 @@ class AdaptiveSoftmaxOutputLayer(chainer.Chain):
                             for i in range(1, self.n_tails + 1)]
         Rs = [getattr(self, 'reduce{}'.format(i))
               for i in range(1, self.n_tails + 1)]
-        cutoff = self.cutoff.data
+        cutoff = self.cutoff.data.astype('i')
         return adaptive_softmax_cross_entropy(
             h, t, Ws, Rs, cutoff, normalize=False, reduce='mean')
