@@ -250,9 +250,10 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
             tail_main = head[:, n_head_out + i - 1]
             tail_main_in = xp.broadcast_to(
                 tail_main[in_cluster][:, None], tail.shape)
-            log_y[in_cluster, lower:upper] = tail_main_in + tail
+            log_y[xp.nonzero(in_cluster)[0], lower:upper] = tail_main_in + tail
             not_in_cluster = xp.logical_not(in_cluster)
-            log_y[not_in_cluster, lower] = tail_main[not_in_cluster]
+            log_y[xp.nonzero(not_in_cluster)[0],
+                  lower] = tail_main[not_in_cluster]
 
         self.y = xp.exp(log_y)
         return log_y
@@ -316,7 +317,7 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
             ret = ret.reshape(t.shape)
         return ret,
 
-    def backward_shared_part(self, inputs, grad_outputs, g_log_p):
+    def backward_shared_part(self, inputs, g_log_p):
         x, t = inputs[:2]
         rest = len(inputs) - 2
         head_W, Ws = inputs[2], inputs[3:2 + (rest - 1) // 2 + 1]
@@ -339,7 +340,7 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
             g_ls_tail_mains.append(
                 g_log_p[:, lower:upper].sum(axis=1, keepdims=True))
 
-            g_ls_tail = g_log_p[in_cluster, lower:upper]
+            g_ls_tail = g_log_p[xp.nonzero(in_cluster)[0], lower:upper]
             g_tail = self.backward_log_softmax(
                 tail, ls_tail, g_ls_tail)
 
@@ -384,18 +385,17 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
         else:
             g_log_p *= gloss[:, None]
 
-        ret = self.backward_shared_part(inputs, grad_outputs, g_log_p)
+        ret = self.backward_shared_part(inputs, g_log_p)
         return ret
 
     def backward_gpu(self, inputs, grad_outputs):
         cupy = cuda.cupy
-        x, t = inputs
-        if hasattr(self, 'y'):
-            y = self.y
-        else:
-            y = log_softmax._log_softmax(x)
-            cupy.exp(y, out=y)
+        x, t = inputs[:2]
+
+        #y = self.y
+        y = self.y.copy()
         gloss = grad_outputs[0]
+
         n_unit = t.size // len(t)
         if self.reduce == 'mean':
             coeff = gloss * self._coeff
@@ -413,7 +413,9 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
                 y, cupy.expand_dims(t, 1), coeff, x.shape[1],
                 n_unit, self.ignore_label)
 
-        return gx, None
+        g_log_p = gx
+        ret = self.backward_shared_part(inputs, g_log_p)
+        return ret
 
 
 def adaptive_softmax_cross_entropy(
@@ -546,6 +548,7 @@ class AdaptiveSoftmaxOutputLayer(chainer.Chain):
                             for i in range(1, self.n_tails + 1)]
         Rs = [getattr(self, 'reduce{}'.format(i))
               for i in range(1, self.n_tails + 1)]
-        cutoff = self.cutoff.data.astype('i')
+        cutoff = self.cutoff.data.astype('i').tolist()
+        # Strange errors happen to cupy when 0-dim array idx is used.
         return adaptive_softmax_cross_entropy(
             h, t, Ws, Rs, cutoff, normalize=False, reduce='mean')
