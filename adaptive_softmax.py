@@ -202,7 +202,8 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
         head_W, Ws = inputs[2], inputs[3:2 + (rest - 1) // 2 + 1]
         Rs = inputs[2 + (rest - 1) // 2 + 1:]
         n_tails = len(Rs)
-        minus_inf = -1024.
+        # minus_inf = -1024.
+        minus_inf = -numpy.inf
         xp = cuda.get_array_module(x)
 
         if chainer.is_debug():
@@ -217,37 +218,31 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
             cluster_hots.append(in_cluster)
         self.cluster_hots = cluster_hots
 
-        head = self.linear(x, head_W)
-        self.head = head
-        head = log_softmax._log_softmax(head)
-        self.ls_head = head
-        reduced_xs = []
-        tails = []
-        ls_tails = []
+        self.head = self.linear(x, head_W)
+        self.ls_head = log_softmax._log_softmax(self.head)
+        self.reduced_xs = []
+        self.tails = []
+        self.ls_tails = []
         for i, in_cluster in enumerate(cluster_hots, start=1):
             tail_idx = i - 1
             reduced_x = self.linear(x[in_cluster], Rs[tail_idx])
-            reduced_xs.append(reduced_x)
+            self.reduced_xs.append(reduced_x)
             out = self.linear(reduced_x, Ws[tail_idx])
-            tails.append(out)
-            out = log_softmax._log_softmax(out)
-            ls_tails.append(out)
-        self.reduced_xs = reduced_xs
-        self.tails = tails
-        self.ls_tails = ls_tails
+            self.tails.append(out)
+            ls_out = log_softmax._log_softmax(out)
+            self.ls_tails.append(ls_out)
 
         n_head_out = head_W.shape[0] - n_tails
         n_out = n_head_out + sum(W.shape[0] for W in Ws)
         shape = (x.shape[0], n_out)
         log_y = xp.full(shape, minus_inf, dtype=x.dtype)
 
-        log_y[:, :n_head_out] = head[:, :n_head_out]
-        # it is possible ``log_[in_head, :n_headout]``, maybe faster?
+        log_y[:, :n_head_out] = self.ls_head[:, :n_head_out]
         for i, (in_cluster, tail) in enumerate(
-                zip(cluster_hots, ls_tails), start=1):
+                zip(cluster_hots, self.ls_tails), start=1):
             lower, upper = self.cutoff[i], self.cutoff[i + 1]
 
-            tail_main = head[:, n_head_out + i - 1]
+            tail_main = self.ls_head[:, n_head_out + i - 1]
             tail_main_in = xp.broadcast_to(
                 tail_main[in_cluster][:, None], tail.shape)
             log_y[xp.nonzero(in_cluster)[0], lower:upper] = tail_main_in + tail
@@ -355,8 +350,6 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
             [g_ls_head_out] + g_ls_tail_mains, axis=1)
         g_head = self.backward_log_softmax(
             self.head, self.ls_head, g_ls_head)
-        # g_head_out = g_head[:, n_head_out]
-        # g_tail_mains = g_head[:, n_head_out:n_head_out + n_tails]
         g_x_from_head, g_head_W = self.backward_linear(x, head_W, g_head)
 
         g_x = g_x_from_head
@@ -365,6 +358,7 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
             g_x[in_cluster] += g_x_from_reduced
         # This should be kernel at once
         # g_x = g_x_from_head + in_cluster * g_x_from_reduced + ...
+        # in forward too.
 
         ret = [g_x, None, g_head_W] + g_Ws + g_Rs
         return tuple(ret)
@@ -392,10 +386,22 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
         cupy = cuda.cupy
         x, t = inputs[:2]
 
-        #y = self.y
-        y = self.y.copy()
+        y = self.y
         gloss = grad_outputs[0]
 
+        g_log_p = y
+        g_log_p[cupy.arange(len(t)), cupy.maximum(t, 0)] -= 1
+
+        g_log_p *= (t != self.ignore_label).reshape((len(t), 1))
+
+        if self.reduce == 'mean':
+            g_log_p *= gloss * self._coeff
+        else:
+            g_log_p *= gloss[:, None]
+
+        ret = self.backward_shared_part(inputs, g_log_p)
+        return ret
+        """
         n_unit = t.size // len(t)
         if self.reduce == 'mean':
             coeff = gloss * self._coeff
@@ -416,6 +422,7 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
         g_log_p = gx
         ret = self.backward_shared_part(inputs, g_log_p)
         return ret
+        """
 
 
 def adaptive_softmax_cross_entropy(
