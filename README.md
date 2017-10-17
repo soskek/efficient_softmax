@@ -25,5 +25,6 @@ For wikitext, run `prepare_wikitext.sh` for downloading the datasets.
 ## Output Layers
 
 - Linear + softmax with cross entropy loss (common setting)
-- A variant using word embedding shared with the input layer for linear projection
-- [BlackOut](https://arxiv.org/pdf/1511.06909.pdf) (But, this is not faster than the common one.)
+- `--share-embedding`: A variant using word embedding shared with the input layer for linear projection
+- `--blackout`: [BlackOut](https://arxiv.org/pdf/1511.06909.pdf) (But, this is not faster than the common one.)
+- `--adaptive-softmax`: [Adaptive softmax](http://proceedings.mlr.press/v70/grave17a/grave17a.pdf)
