@@ -32,53 +32,6 @@ from chainer.functions.activation import log_softmax
 from chainer.utils import type_check
 from chainer import variable
 
-"""
-class AdaptiveSoftmaxOutputLayer(chainer.Chain):
-    def __init__(self, n_units, n_vocab,
-                 cutoff=[2000, 10000], reduce_k=4):
-        super(AdaptiveSoftmaxOutputLayer, self).__init__()
-        assert(all(c < n_vocab - 1 for c in cutoff))
-        self.n_clusters = len(cutoff) + 1
-        self.n_tails = self.n_clusters - 1
-        cutoff.append(n_vocab - 1)
-        with self.init_scope():
-            self.head = L.Linear(n_units, cutoff[0] + self.n_tails)
-            tail_units = n_units
-            for i in range(1, self.n_tails + 1):
-                tail_units = tail_units // reduce_k
-                n_comp_words = cutoff[i] - cutoff[i - 1]
-                assert(tail_units > 0)
-                assert(n_comp_words > 0)
-                # TODO: reduce at once: d -> [d//4 + d//16 + ...] and split
-                # as far as we do not use batch reduction (B -> pB) for tails
-                self.add_link('reduce{}'.format(i),
-                              L.Linear(n_units, tail_units))
-                self.add_link('tail{}'.format(i),
-                              L.Linear(tail_units, n_comp_words))
-
-            cutoff = self.xp.array([0] + cutoff, dtype=np.int32)
-            assert(len(cutoff) == self.n_clusters + 1)
-            self.add_param('cutoff', cutoff.shape, dtype='f')
-            self.cutoff.data[:] = cutoff
-        print('init adaptive softmax')
-
-    def output_and_loss(self, h, t):
-        xp = self.xp
-
-        head_logit = self.head(h)
-        # tail_logits = [head_logit[:, i - self.n_tails: i - self.n_tails + 1]
-        #                for i in range(self.n_tail)]
-        cluster2logit = [head_logit[:, :- self.n_tails]]
-        for i in range(1, self.n_tails + 1):
-            reduced_h = getattr(self, 'reduce{}'.format(i))(h)
-            comp_logit = getattr(self, 'tail{}'.format(i))(reduced_h)
-            cluster2logit.append(comp_logit)
-
-        logit = F.concat(cluster2logit, axis=1)
-        return F.softmax_cross_entropy(
-            logit, t, normalize=False, reduce='mean')
-"""
-
 
 def _broadcast_to(array, shape):
     if hasattr(numpy, "broadcast_to"):
@@ -235,6 +188,7 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
         n_head_out = head_W.shape[0] - n_tails
         n_out = n_head_out + sum(W.shape[0] for W in Ws)
         shape = (x.shape[0], n_out)
+
         log_y = xp.full(shape, minus_inf, dtype=x.dtype)
 
         log_y[:, :n_head_out] = self.ls_head[:, :n_head_out]
@@ -517,11 +471,12 @@ class AdaptiveSoftmaxOutputLayer(chainer.Chain):
         assert(all(c < n_vocab - 1 for c in cutoff))
         self.n_clusters = len(cutoff) + 1
         self.n_tails = self.n_clusters - 1
+
         cutoff.append(n_vocab)
         with self.init_scope():
             self.head = variable.Parameter(None)
             self.head.initialize((cutoff[0] + self.n_tails, n_units))
-            # self.head = L.Linear(n_units, cutoff[0] + self.n_tails)
+
             tail_units = n_units
             for i in range(1, self.n_tails + 1):
                 tail_units = tail_units // reduce_k
@@ -530,12 +485,6 @@ class AdaptiveSoftmaxOutputLayer(chainer.Chain):
                 assert(n_comp_words > 0)
                 # TODO: reduce at once: d -> [d//4 + d//16 + ...] and split
                 # as far as we do not use batch reduction (B -> pB) for tails
-                """
-                self.add_link('reduce{}'.format(i),
-                              L.Linear(n_units, tail_units))
-                self.add_link('tail{}'.format(i),
-                              L.Linear(tail_units, n_comp_words))
-                """
 
                 self.add_param('reduce{}'.format(i))
                 getattr(self, 'reduce{}'.format(i)).initialize(
@@ -556,6 +505,6 @@ class AdaptiveSoftmaxOutputLayer(chainer.Chain):
         Rs = [getattr(self, 'reduce{}'.format(i))
               for i in range(1, self.n_tails + 1)]
         cutoff = self.cutoff.data.astype('i').tolist()
-        # Strange errors happen to cupy when 0-dim array idx is used.
+        # An error happens to cupy when 0-dim array idx is directly used.
         return adaptive_softmax_cross_entropy(
             h, t, Ws, Rs, cutoff, normalize=False, reduce='mean')
