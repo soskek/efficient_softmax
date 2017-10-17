@@ -310,7 +310,7 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
         for i, (in_cluster, g_x_from_reduced) in enumerate(
                 zip(self.cluster_hots, g_xs_from_reduced), start=1):
             g_x[in_cluster] += g_x_from_reduced
-        # This should be kernel at once
+        # This should be kernel at once?
         # g_x = g_x_from_head + in_cluster * g_x_from_reduced + ...
         # in forward too.
 
@@ -355,28 +355,6 @@ class AdaptiveSoftmaxCrossEntropy(function.Function):
 
         ret = self.backward_shared_part(inputs, g_log_p)
         return ret
-        """
-        n_unit = t.size // len(t)
-        if self.reduce == 'mean':
-            coeff = gloss * self._coeff
-        else:
-            coeff = gloss[:, None, ...]
-
-        gx = cuda.elementwise(
-            'T y, S t, T coeff, S n_channel, S n_unit, S ignore_label',
-            'T gx',
-            '''
-              const int c = (i / n_unit % n_channel);
-              gx = t == ignore_label ? 0 : coeff * (y - (c == t));
-            ''',
-            'softmax_crossent_bwd')(
-                y, cupy.expand_dims(t, 1), coeff, x.shape[1],
-                n_unit, self.ignore_label)
-
-        g_log_p = gx
-        ret = self.backward_shared_part(inputs, g_log_p)
-        return ret
-        """
 
 
 def adaptive_softmax_cross_entropy(
@@ -420,39 +398,11 @@ def adaptive_softmax_cross_entropy(
             instance and does not normalize it (``normalize`` option is
             ignored). In this case, the loss value of the ignored instance,
             which has ``ignore_label`` as its target value, is set to ``0``.
-        enable_double_backprop (bool): If ``True``, this function uses
-            implementation that supports higher order differentiation.
-            If ``False``, it uses single-backprop implementation.
-            This function use the single-backprop version because we expect
-            it is faster. So, if you need second or higher derivatives,
-            you need to turn it on explicitly.
 
     Returns:
         ~chainer.Variable: A variable holding a scalar array of the cross
         entropy loss.  If ``reduce`` is ``'mean'``, it is a scalar array.
         If ``reduce`` is ``'no'``, the shape is same as that of ``x``.
-
-    .. note::
-
-       This function is differentiable only by ``x``.
-
-    .. admonition:: Example
-
-        >>> x = np.array([[-1, 0, 1, 2], [2, 0, 1, -1]]).astype('f')
-        >>> x
-        array([[-1.,  0.,  1.,  2.],
-               [ 2.,  0.,  1., -1.]], dtype=float32)
-        >>> t = np.array([3, 0]).astype('i')
-        >>> t
-        array([3, 0], dtype=int32)
-        >>> y = F.adaptive_softmax_cross_entropy(x, t)
-        >>> y
-        variable(0.4401897192001343)
-        >>> log_softmax = -F.log_softmax(x)
-        >>> expected_loss = np.mean([log_softmax[row, column].data \
-for row, column in enumerate(t)])
-        >>> y.array == expected_loss
-        True
 
     """
 
@@ -484,8 +434,6 @@ class AdaptiveSoftmaxOutputLayer(chainer.Chain):
                 n_comp_words = cutoff[i] - cutoff[i - 1]
                 assert(tail_units > 0)
                 assert(n_comp_words > 0)
-                # TODO: reduce at once: d -> [d//4 + d//16 + ...] and split
-                # as far as we do not use batch reduction (B -> pB) for tails
 
                 self.add_param('reduce{}'.format(i), initializer=initializer)
                 getattr(self, 'reduce{}'.format(i)).initialize(
