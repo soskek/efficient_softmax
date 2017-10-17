@@ -6,7 +6,7 @@ LSTM language models are derived from [rnnlm_chainer](https://github.com/soskek/
 
 Available output layers are as follows
 
-- Linear + softmax with cross entropy loss. An usual output layer.
+- Linear + softmax with cross entropy loss. A usual output layer.
 - `--share-embedding`: A variant using the word embedding matrix shared with the input layer for the output layer.
 - `--adaptive-softmax`: [Adaptive softmax](http://proceedings.mlr.press/v70/grave17a/grave17a.pdf)
 - `--blackout`: [BlackOut](https://arxiv.org/pdf/1511.06909.pdf) (BlackOut is not faster on GPU.)
