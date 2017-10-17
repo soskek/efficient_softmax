@@ -14,7 +14,7 @@ Available output layers are as follows
 ### Adaptive Softmax
 
 - Efficient softmax approximation for GPUs
-- Grave, Armand Joulin, Moustapha Cissé, David Grangier, Hervé Jégou, ICML 2017
+- Edouard Grave, Armand Joulin, Moustapha Cissé, David Grangier, Hervé Jégou, ICML 2017
 - [paper](http://proceedings.mlr.press/v70/grave17a/grave17a.pdf)
 - [authors' Lua code](https://github.com/facebookresearch/adaptive-softmax)
 
