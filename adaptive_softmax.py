@@ -473,8 +473,9 @@ class AdaptiveSoftmaxOutputLayer(chainer.Chain):
         self.n_tails = self.n_clusters - 1
 
         cutoff.append(n_vocab)
+        initializer = chainer.initializers._get_initializer(None)
         with self.init_scope():
-            self.head = variable.Parameter(None)
+            self.head = variable.Parameter(initializer=initializer)
             self.head.initialize((cutoff[0] + self.n_tails, n_units))
 
             tail_units = n_units
@@ -486,10 +487,10 @@ class AdaptiveSoftmaxOutputLayer(chainer.Chain):
                 # TODO: reduce at once: d -> [d//4 + d//16 + ...] and split
                 # as far as we do not use batch reduction (B -> pB) for tails
 
-                self.add_param('reduce{}'.format(i))
+                self.add_param('reduce{}'.format(i), initializer=initializer)
                 getattr(self, 'reduce{}'.format(i)).initialize(
                     (tail_units, n_units))
-                self.add_param('tail{}'.format(i))
+                self.add_param('tail{}'.format(i), initializer=initializer)
                 getattr(self, 'tail{}'.format(i)).initialize(
                     (n_comp_words, tail_units))
 
