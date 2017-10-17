@@ -1,18 +1,35 @@
-# RNN Language Model and Various Output Layers by Chainer
+# Efficient Softmax Approximation
 
-This is a fast implementation of an RNN language model (RNNLM) by Chainer. You can use BlackOut and AdaptiveSoftmax.
-This repository is derived from the [Chainer example for RNNLM in PTB](https://github.com/chainer/chainer/tree/master/examples/ptb).
+Implementations of Blackout and Adaptive Softmax for efficiently calculating word distribution for language modeling of very large vocabularies.
 
-The network architecture is almost same as the "Medium" model in the paper, ["Recurrent Neural Network Regularization"](https://arxiv.org/pdf/1409.2329.pdf) by Wojciech Zaremba, Ilya Sutskever and Oriol Vinyals.
-You can train an RNNLM in 1 miniute per epoch, with backprop length of 35 and batchsize of 20.
+LSTM language models are derived from [rnnlm_chainer](https://github.com/soskek/rnnlm_chainer).
+
+Available output layers are as follows
+
+- Linear + softmax with cross entropy loss. An usual output layer.
+- `--share-embedding`: A variant using the word embedding matrix shared with the input layer for the output layer.
+- `--adaptive-softmax`: [Adaptive softmax](http://proceedings.mlr.press/v70/grave17a/grave17a.pdf)
+- `--blackout`: [BlackOut](https://arxiv.org/pdf/1511.06909.pdf) (BlackOut is not faster on GPU.)
+
+### Adaptive Softmax
+
+- Efficient softmax approximation for GPUs
+- Grave, Armand Joulin, Moustapha Cissé, David Grangier, Hervé Jégou, ICML 2017
+- [paper](http://proceedings.mlr.press/v70/grave17a/grave17a.pdf)
+- [authors' Lua code](https://github.com/facebookresearch/adaptive-softmax)
+
+### BlackOut
+
+- BlackOut: Speeding up Recurrent Neural Network Language Models With Very Large Vocabularies
+- Shihao Ji, S. V. N. Vishwanathan, Nadathur Satish, Michael J. Anderson, Pradeep Dubey, ICLR 2016
+- [paper](https://arxiv.org/pdf/1511.06909.pdf)
+- [authors' C++ code](https://github.com/IntelLabs/rnnlm)
 
 # How to Run
 
 ```
 python -u train.py -g 0
 ```
-
-# Datasets and Models
 
 ## Datasets
 
@@ -21,10 +38,3 @@ python -u train.py -g 0
 - Wikitext-103
 
 For wikitext, run `prepare_wikitext.sh` for downloading the datasets.
-
-## Output Layers
-
-- Linear + softmax with cross entropy loss (common setting)
-- `--share-embedding`: A variant using word embedding shared with the input layer for linear projection
-- `--blackout`: [BlackOut](https://arxiv.org/pdf/1511.06909.pdf) (But, this is not faster than the common one.)
-- `--adaptive-softmax`: [Adaptive softmax](http://proceedings.mlr.press/v70/grave17a/grave17a.pdf)
