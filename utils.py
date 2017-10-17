@@ -67,34 +67,6 @@ def tokenize_text(file_path, vocab={}, update_vocab=False):
     return tokens, vocab
 
 
-def make_word_weight(vocab, lm_count_path, tg_count_path,
-                     ignore_words=['<eos>', '<unk>'], ignored=1.):
-    lm_count = json.load(open(lm_count_path))
-    tg_count = json.load(open(tg_count_path))
-    order = [w for w, i in sorted(vocab.items(), key=lambda x:x[1])]
-    lm_count_array = np.array(
-        [lm_count.get(w, 0.) for w in order], 'f')
-    lm_count_array /= lm_count_array.sum()
-    tg_count_array = np.array(
-        [tg_count.get(w, 0.) for w in order], 'f')
-    tg_count_array /= tg_count_array.sum()
-    weight_array = tg_count_array / np.maximum(lm_count_array, 1e-8)
-    weight_array = np.maximum(weight_array, 0.1)
-    weight_array = np.minimum(weight_array, 10.)
-    for w in ignore_words:
-        if w not in tg_count:
-            weight_array[vocab[w]] = ignored
-    sum_weight = sum([lm_count[word] * weight
-                      for word, weight in zip(order, weight_array)])
-    raw_sum_weight = sum([lm_count[word]
-                          for word, weight in zip(order, weight_array)])
-    weight_array *= (raw_sum_weight * 1. / sum_weight)
-    word2weight = dict((word, weight)
-                       for word, weight in zip(order, weight_array.tolist()))
-    json.dump(word2weight, open(lm_count_path + '.weight', 'w'))
-    return weight_array
-
-
 def get_wikitext_words_and_vocab(name='wikitext-2', base_dir='datasets', vocab=None):
     assert(name in ['wikitext-2', 'wikitext-103'])
     base_dir2 = os.path.join(base_dir, name)

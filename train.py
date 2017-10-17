@@ -43,6 +43,7 @@ def main():
     parser.add_argument('--dropout', type=float, default=0.5)
     parser.add_argument('--share-embedding', action='store_true')
     parser.add_argument('--blackout', action='store_true')
+    parser.add_argument('--adaptive-softmax', action='store_true')
     parser.add_argument('--dataset', default='ptb',
                         choices=['ptb', 'wikitext-2', 'wikitext-103'])
     parser.add_argument('--vocab')
@@ -50,11 +51,7 @@ def main():
     parser.add_argument('--validation-interval', '--val-interval',
                         type=int, default=30000)
     parser.add_argument('--decay-if-fail', action='store_true')
-    parser.add_argument('--word-weight', action='store_true')
-    parser.add_argument('--dead-or-alive', action='store_true')
-    parser.add_argument('--adaptive-softmax', action='store_true')
-    parser.add_argument('--lm-count-path', '--lm-count')
-    parser.add_argument('--tg-count-path', '--tg-count')
+
     args = parser.parse_args()
     print(json.dumps(args.__dict__, indent=2))
 
@@ -110,13 +107,6 @@ def main():
     print('#test tokens =', len(test))
     print('#vocab =', n_vocab)
 
-    if args.word_weight:
-        word_weight = utils.make_word_weight(
-            vocab, args.lm_count_path, args.tg_count_path,
-            dead_or_alive=args.dead_or_alive)
-    else:
-        word_weight = None
-
     # Create the dataset iterators
     train_iter = utils.ParallelSequentialIterator(train, args.batchsize)
     val_iter = utils.ParallelSequentialIterator(val, 1, repeat=False)
@@ -129,16 +119,13 @@ def main():
     else:
         counts = None
     model = nets.RNNForLM(n_vocab, args.unit, args.layer, args.dropout,
-                          args.share_embedding, blackout_counts=counts,
-                          dead_or_alive=args.dead_or_alive,
+                          share_embedding=args.share_embedding,
+                          blackout_counts=counts,
                           adaptive_softmax=args.adaptive_softmax)
 
     if args.gpu >= 0:
         chainer.cuda.get_device_from_id(args.gpu).use()
         model.to_gpu()
-    if args.word_weight:
-        to_xpu = cuda.to_gpu if args.gpu >= 0 else cuda.to_cpu
-        model.output.word_weight = to_xpu(word_weight)
 
     # Set up an optimizer
     # optimizer = chainer.optimizers.SGD(lr=1.0)
