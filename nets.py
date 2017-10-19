@@ -43,6 +43,9 @@ class BlackOutOutputLayer(BlackOut):
     def __call__(self, h):
         return F.linear(h, self.W)
 
+    def output(self, h, t=None):
+        return self(h)
+
 
 class NormalOutputLayer(L.Linear):
     def __init__(self, *args, **kwargs):
@@ -52,6 +55,9 @@ class NormalOutputLayer(L.Linear):
         logit = self(h)
         return F.softmax_cross_entropy(
             logit, t, normalize=False, reduce='mean')
+
+    def output(self, h, t=None):
+        return self(h)
 
 
 class SharedOutputLayer(chainer.Chain):
@@ -80,6 +86,9 @@ class SharedOutputLayer(chainer.Chain):
         if self.scale is not None:
             out *= F.broadcast_to(self.scale[None], out.shape)
         return out
+
+    def output(self, h, t=None):
+        return self(h)
 
 # Definition of a recurrent net for language modeling
 
