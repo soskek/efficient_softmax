@@ -181,12 +181,17 @@ class AdaptiveSoftmaxOutput(function.Function):
         self.ls_tails = []
         for i, in_cluster in enumerate(cluster_hots, start=1):
             tail_idx = i - 1
-            reduced_x = self.linear(x[in_cluster], Rs[tail_idx])
-            self.reduced_xs.append(reduced_x)
-            out = self.linear(reduced_x, Ws[tail_idx])
-            self.tails.append(out)
-            ls_out = log_softmax._log_softmax(out)
-            self.ls_tails.append(ls_out)
+            if xp.any(in_cluster):
+                reduced_x = self.linear(x[in_cluster], Rs[tail_idx])
+                self.reduced_xs.append(reduced_x)
+                out = self.linear(reduced_x, Ws[tail_idx])
+                self.tails.append(out)
+                ls_out = log_softmax._log_softmax(out)
+                self.ls_tails.append(ls_out)
+            else:
+                self.reduced_xs.append(None)
+                self.tails.append(None)
+                self.ls_tails.append(None)
 
         n_head_out = head_W.shape[0] - n_tails
         n_out = n_head_out + sum(W.shape[0] for W in Ws)
@@ -231,19 +236,24 @@ class AdaptiveSoftmaxOutput(function.Function):
                 zip(self.cluster_hots, self.reduced_xs,
                     self.tails, self.ls_tails, Ws, Rs), start=1):
             lower, upper = self.cutoff[i], self.cutoff[i + 1]
-            g_ls_tail_mains.append(
-                g_log_p[:, lower:upper].sum(axis=1, keepdims=True))
+            if xp.any(in_cluster):
+                g_ls_tail_mains.append(
+                    g_log_p[:, lower:upper].sum(axis=1, keepdims=True))
 
-            g_ls_tail = g_log_p[xp.nonzero(in_cluster)[0], lower:upper]
-            g_tail = self.backward_log_softmax(
-                tail, ls_tail, g_ls_tail)
+                g_ls_tail = g_log_p[xp.nonzero(in_cluster)[0], lower:upper]
+                g_tail = self.backward_log_softmax(
+                    tail, ls_tail, g_ls_tail)
 
-            g_reduced_x, g_W = self.backward_linear(reduced_x, W, g_tail)
-            g_x_from_reduced, g_R = self.backward_linear(
-                x[in_cluster], R, g_reduced_x)
-            g_Ws.append(g_W)
-            g_Rs.append(g_R)
-            g_xs_from_reduced.append(g_x_from_reduced)
+                g_reduced_x, g_W = self.backward_linear(reduced_x, W, g_tail)
+                g_x_from_reduced, g_R = self.backward_linear(
+                    x[in_cluster], R, g_reduced_x)
+                g_Ws.append(g_W)
+                g_Rs.append(g_R)
+                g_xs_from_reduced.append(g_x_from_reduced)
+            else:
+                g_Ws.append(xp.zeros(W.shape, dtype=W.dtype))
+                g_Rs.append(xp.zeros(R.shape, dtype=R.dtype))
+                g_xs_from_reduced.append(0.)
 
         g_ls_head = xp.concatenate(
             [g_ls_head_out] + g_ls_tail_mains, axis=1)
