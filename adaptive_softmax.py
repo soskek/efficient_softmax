@@ -202,6 +202,8 @@ class AdaptiveSoftmaxOutput(function.Function):
         log_y[:, :n_head_out] = self.ls_head[:, :n_head_out]
         for i, (in_cluster, tail) in enumerate(
                 zip(cluster_hots, self.ls_tails), start=1):
+            if tail is None:
+                continue
             lower, upper = self.cutoff[i], self.cutoff[i + 1]
 
             tail_main = self.ls_head[:, n_head_out + i - 1]
